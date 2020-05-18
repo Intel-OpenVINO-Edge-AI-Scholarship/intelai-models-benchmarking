@@ -1,0 +1,10 @@
+benchmarking Command to execute
+-------------------------------
+
+python launch_benchmark.py --output-dir=/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/tensorflow_object_detection_create_coco_tfrecord -mo=inference --data-location=/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/pascal_voc_tfrecord/tfrecord.record -rd=0.5 --in-graph=/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Repository/keras-arcface/models/mnist_vgg8_arcface_5d/arcface.pb -v --framework=tensorflow --p=fp32 -m=face_recognition_aspect -r=/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Repository/keras-arcface/models/mnist_vgg8_arcface_5d --num-inter-threads=10 --num-intra-threads=10 --benchmark-only --batch_size=32
+
+TFRecord Creation
+-----------------
+
+python object_detection/dataset_tools/create_pascal_tf_record.py --data_dir=/home/aswin/Documents/Courses/Udacity/Intel-Edge/Repository/caffe2-pose-estimation/annotations/VOCtest_06-Nov-2007/VOCdevkit --year=VOC2007 --output_path=/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/pascal_voc_tfrecord/tfrecord.record --label_map_path /home/aswin/Documents/Courses/Udacity/Intel-Edge/Repository/caffe2-pose-estimation/annotations/VOCtest_06-Nov-2007/VOCdevkit/VOC2007/ImageSets/Main/person_test_old.txt --annotations_dir Annotations --set test
+
