@@ -37,7 +37,6 @@ import random
 from pprint import PrettyPrinter
 
 from argparse import ArgumentParser
-from inference.coco_detection_evaluator import CocoDetectionEvaluator
 from inference.face_label_map import category_map
 from inference.metrics_face import ArcFace
 from inference import object_detection
@@ -99,6 +98,40 @@ def parse_and_preprocess(serialized_example):
 
   return bbox[0], label, image_id, features
 
+def exec_evaluator(ground_truth_dicts, detect_dicts, image_id_gt_dict,
+total_iter, batch_size):
+  import sys
+  
+  if "numpy" in sys.modules:
+    del sys.modules["numpy"]
+  if "np" in sys.modules:
+    del sys.modules["np"]
+  import numpy as np
+  
+  def setUp():
+    np.round = round
+  
+  from inference.coco_detection_evaluator import CocoDetectionEvaluator
+
+  setUp()
+  
+  evaluator = CocoDetectionEvaluator()
+  for step in range(total_iter):
+    # add single ground truth info detected
+    # add single image info detected
+    if step in list(detect_dicts.keys()):
+      try:
+        evaluator.add_single_ground_truth_image_info(image_id_gt_dict[step], ground_truth_dicts[step])
+        evaluator.add_single_detected_image_info(image_id_gt_dict[step], detect_dicts[step])
+      except Exception as e:
+        raise e
+
+  if (step + 1) * batch_size >= COCO_NUM_VAL_IMAGES:
+    metrics = evaluator.evaluate()
+  
+  if metrics:
+    pp = PrettyPrinter(indent=4)
+    pp.pprint(metrics)
 
 class model_infer:
 
@@ -341,14 +374,16 @@ class model_infer:
   
   def accuracy_check(self):
     print("Inference for accuracy check.")
-    total_iter = 100
+    total_iter = COCO_NUM_VAL_IMAGES
+    fm = category_map
+    fm = dict(zip(list(fm.values()),list(fm.keys())))
+    print('total iteration is {0}'.format(str(total_iter)))
     global model, graph
     with tf.Session().as_default() as sess:
       if self.args.data_location:
         self.build_data_sess()
       else:
         raise Exception("no data location provided")
-      evaluator = CocoDetectionEvaluator()
       total_samples = 0
       self.coord = tf.train.Coordinator()
       tfrecord_paths = [self.args.data_location]
@@ -369,10 +404,11 @@ class model_infer:
       state = None
       warmup_iter = 0
       
-      data_bbox = {}
-      data_label = {}
-      data_image_id = {}
-      data_bbox_d = {}
+      self.ground_truth_dicts = {}
+      self.detect_dicts = {}
+
+      self.total_iter = total_iter
+      self.image_id_gt_dict = {}
 
       if self.args.data_location:
         image_batches = []
@@ -387,65 +423,59 @@ class model_infer:
           # ground truth of bounding boxes from pascal voc
           ground_truth = {}
           ground_truth['boxes'] = np.asarray(bbox[0])
-          label_gt = [l if type(l) == 'str' else l.decode('utf-8') for l in label]
+          label_gt = [fm[l] if type(l) == 'str' else fm[l.decode('utf-8')] for l in label]
           image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
-          ground_truth['classes'] = np.array(label_gt)
-          try:
-            evaluator.add_single_ground_truth_image_info(image_id_gt[0], ground_truth)
-          except Exception as e:
-            pass
+          ground_truth['classes'] = np.array(label_gt*len(ground_truth['boxes']))
+          # saving all ground truth dictionaries
+          self.ground_truth_dicts[step] = ground_truth
+          self.image_id_gt_dict[step] = image_id_gt[0]
 
           images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
           # face detection
           boxes, confidences, classIds = self.face_detector(images, image_id_gt, self.args.batch_size)
 
           boxes = self.filter_conventional_box_images(boxes)
-          if len(boxes) > 0:
-            # ground truth bounding box
-            images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
-            total_samples += images_new.shape[0]
-            images_new = self.augment_images(images_new)
+          try:
+            if len(boxes) > 0:
+              # ground truth bounding box
+              images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
+              total_samples += images_new.shape[0]
+              images_new = self.augment_images(images_new)
 
-            # detection for bounding boxes from pascal voc
-            detect = {}
-            label_det = label_gt
-            image_id_det = image_id_gt
-            # detected conventional bounding box
-            images_sync = self.preprocess_conventional_box_images(images, boxes, image_id_det)
-            images_sync = self.augment_images(images_sync)
+              # detection for bounding boxes from pascal voc
+              detect = {}
+              label_det = label_gt
+              image_id_det = image_id_gt
+              # detected conventional bounding box
+              images_sync = self.preprocess_conventional_box_images(images, boxes, image_id_det)
+              images_sync = self.augment_images(images_sync)
 
-            detect['boxes'] = np.asarray(boxes)
-            detect['classes'] = np.asarray(label_det)
-            features = self.arcface_model.predict(images_sync, verbose=1)
-            measures = self.measure(features)
-            if measures[0][0]:
-              detect['scores'] = np.asarray([[measures[0][1]]])
-            elif measures[0][1] > 0:
-              detect['scores'] = np.asarray([[measures[0][1]]])
-            else:
-              detect['scores'] = np.asarray([[0]])
-            try:
-              evaluator.add_single_detected_image_info(image_id_det[0], detect)
-            except Exception as e:
-              pass
+              detect['boxes'] = np.asarray(boxes)
+              detect['classes'] = np.asarray(label_det*len(detect['boxes']))
+              features = self.arcface_model.predict(images_sync, verbose=1)
+              measures = self.measure(features)
+              if measures[0][0]:
+                detect['scores'] = np.broadcast_to(np.mean(np.asarray(measures[0][1])),len(detect['boxes']))
+              elif np.mean(measures[0][1]) > 0:
+                detect['scores'] = np.broadcast_to(np.mean(np.asarray(measures[0][1])),len(detect['boxes']))
+              else:
+                detect['scores'] = np.broadcast_to(np.asarray([0]),len(detect['boxes']))
+              
+              self.detect_dicts[step] = detect
+          except Exception as e:
+            print(e.args)
 
           if (step + 1) % 10 == 0:
             print('steps = {0} step'.format(str(step)))
-          
-        if step * self.args.batch_size >= COCO_NUM_VAL_IMAGES:
-          metrics = evaluator.evaluate()
-        
-        if metrics:
-          pp = PrettyPrinter(indent=4)
-          pp.pprint(metrics)
 
   def run(self):
     if self.args.accuracy_only:
       self.accuracy_check()
+      exec_evaluator(self.ground_truth_dicts, 
+      self.detect_dicts, self.image_id_gt_dict, 
+      self.total_iter, self.args.batch_size)
     elif self.args.benchmark_only:
       self.run_benchmark()
-
-
 
 if __name__ == "__main__":
   infer = model_infer()

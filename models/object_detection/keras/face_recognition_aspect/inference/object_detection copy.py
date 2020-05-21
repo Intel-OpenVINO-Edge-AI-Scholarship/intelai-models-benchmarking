@@ -232,7 +232,6 @@ def framesThreadBody():
     # while process:
         # hasFrame, frame = cap.read()
     frame = args.inputs
-    print('abcd')
     # r = np.zeros((frame.shape[0],frame.shape[1],3))
     # if not hasFrame:
     #     break
@@ -259,7 +258,6 @@ def processingThreadBody():
                     frame = None  # Skip the frame
             else:
                 framesQueue.queue.clear()  # Skip the rest of frames
-            print('abcd2')
         except queue.Empty:
             pass
 
@@ -290,8 +288,6 @@ def processingThreadBody():
             out = futureOutputs[0].get()
             predictionsQueue.put(np.copy([out]))
 
-            print('abcd3')
-
             del futureOutputs[0]
 
 
@@ -311,8 +307,6 @@ def func(args):
             frame = processedFramesQueue.get_nowait()
 
             boxes, confidences, classIds = postprocess(frame, outs)
-
-            print('abcd4')
 
             # Put efficiency information.
             if predictionsQueue.counter > 1:
@@ -347,12 +341,10 @@ def update_param_dict(param_dict, obj):
 def callable(param_dict):
     process = False
     global args
-    print('abcd78')
     args = obtain_args(param_dict)
     update_param_dict(param_dict, args)
     confThreshold = args.thr
     nmsThreshold = args.nms
-    print('abcd6')
     func2(args)
 
     if args.motion_tracker:

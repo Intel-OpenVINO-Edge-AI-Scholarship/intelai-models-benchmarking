@@ -85,7 +85,6 @@ def parse_and_preprocess(serialized_example):
   return bbox, label, image_id, features
 
 def iter_tensor(iterator):
-  print(iterator)
   return iterator
 
 class model_infer:
@@ -166,11 +165,9 @@ class model_infer:
   # pnorm for color images
   def preprocess_bounding_box_images(self, images, bbox, image_source):
     img = np.zeros((1,len(bbox),160,160,3))
-    print("Images: ", len(images))
     for ii in range(len(bbox)):
       ymin, xmin, ymax, xmax = bbox[ii][0]
       i = images[ii][ymin:ymax,xmin:xmax]
-      print(i.shape)
       i = cv2.resize(i, (160,160))
       img[0,ii] = i
     return img
@@ -232,9 +229,6 @@ class model_infer:
             box = box.eval(session=sess)
             label = label.eval(session=sess).flatten()
             image_source = image_source.eval(session=sess).flatten()
-            print(box.shape)
-            print(label.shape)
-            print(image_source.shape)
 
             image_source = [image_id if type(image_id) == 'str' else image_id.decode('utf-8') for image_id in image_source]
             label = [x if type(x) == 'str' else x.decode('utf-8') for x in label]

@@ -28,7 +28,7 @@ class CocoDetectionEvaluator:
         self._groundtruth_list = []
         self._detection_boxes_list = []
         self._annotation_id = 1
-        self._category_id_set = set([cat for cat in face_label_map.category_map])
+        self._category_id_set = set([cat for cat in face_label_map.category_map.keys()])
         self._groundtruth_list = []
         self._detection_boxes_list = []
 

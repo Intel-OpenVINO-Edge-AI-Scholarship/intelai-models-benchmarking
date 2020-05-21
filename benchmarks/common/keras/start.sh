@@ -60,7 +60,7 @@ fi
 
 if [[ ${NOINSTALL} != "True" ]]; then
   ## install common dependencies
-  apt update
+  # apt update
   apt full-upgrade -y
   # Set env var before installs so that user interaction is not required
   export DEBIAN_FRONTEND=noninteractive
@@ -363,7 +363,8 @@ function minigo() {
         INTELAI_MODEL_DIR=${MOUNT_INTELAI_MODELS_SOURCE}
         BENCHMARK_DIR=${MOUNT_BENCHMARK}
         # install dependencies
-        apt-get update && apt-get install -y cpio
+        # apt-get update && 
+        apt-get install -y cpio
         # pip3 install -r ${MODEL_DIR}/requirements.txt
         pip install -r ${BENCHMARK_DIR}/reinforcement/tensorflow/minigo/requirements.txt
         if [ ! -f "bazel-0.22.0-installer-linux-x86_64.sh" ];then
@@ -603,7 +604,8 @@ function ssd_mobilenet() {
 
   if [ ${NOINSTALL} != "True" ]; then
     # install dependencies for both fp32 and int8
-    apt-get update && apt-get install -y git
+    #apt-get update && 
+    apt-get install -y git
     # install one by one to solve dependency problems
     for line in $(cat ${MOUNT_BENCHMARK}/object_detection/tensorflow/ssd-mobilenet/requirements.txt)
     do
@@ -711,7 +713,7 @@ function wide_deep_large_ds() {
 
     if [[ -z "${LIBTCMALLOC}" ]]; then
       echo "libtcmalloc.so.4 not found, trying to install"
-      apt-get update
+      #apt-get update
       apt-get install google-perftools --fix-missing -y
     fi
 

@@ -63,33 +63,37 @@ def main(param_args, frame):
             classes = f.read().rstrip('\n').split('\n')
 
     # Load a network
-    net = cv.dnn.readNet(args.model, args.config, args.framework)
-    net.setPreferableBackend(args.backend)
-    net.setPreferableTarget(args.target)
-    outNames = net.getUnconnectedOutLayersNames()
+    try:
+        net = cv.dnn.readNet(args.model, args.config, args.framework)
+        net.setPreferableBackend(args.backend)
+        net.setPreferableTarget(args.target)
+        outNames = net.getUnconnectedOutLayersNames()
 
-    if not frame is None:
-        frameHeight = frame.shape[0]
-        frameWidth = frame.shape[1]
-    
-    # Create a 4D blob from a frame.
-    inpWidth = frameWidth
-    inpHeight = frameHeight
-    blob = cv.dnn.blobFromImage(frame, size=(inpWidth, inpHeight), swapRB=args.rgb, ddepth=cv.CV_8U)
+        if not frame is None:
+            frameHeight = frame.shape[0]
+            frameWidth = frame.shape[1]
+        
+        # Create a 4D blob from a frame.
+        inpWidth = frameWidth
+        inpHeight = frameHeight
+        blob = cv.dnn.blobFromImage(frame, size=(inpWidth, inpHeight), swapRB=args.rgb, ddepth=cv.CV_8U)
 
-    # Run a model
-    net.setInput(blob, scalefactor=args.scale)
-    if net.getLayer(0).outputNameToIndex('im_info') != -1:  # Faster-RCNN or R-FCN
-        frame = cv.resize(frame, (inpWidth, inpHeight))
-        net.setInput(np.array([[inpHeight, inpWidth, 1.6]], dtype=np.float32), 'im_info')
+        # Run a model
+        net.setInput(blob, scalefactor=args.scale)
+        if net.getLayer(0).outputNameToIndex('im_info') != -1:  # Faster-RCNN or R-FCN
+            frame = cv.resize(frame, (inpWidth, inpHeight))
+            net.setInput(np.array([[inpHeight, inpWidth, 1.6]], dtype=np.float32), 'im_info')
 
-    if is_async:
-        futureOutputs.append(net.forwardAsync())
-    else:
-        outs = net.forward(outNames)
-        boxes, confidences, classIds = postprocess(net, frame, outs)
+        if is_async:
+            futureOutputs.append(net.forwardAsync())
+        else:
+            outs = net.forward(outNames)
+            boxes, confidences, classIds = postprocess(net, frame, outs)
+        return boxes, confidences, classIds
+    except Exception as e:
+        print(e.args)
 
-    return boxes, confidences, classIds
+    return [], [], []
 
 classIds = []
 confidences = []

@@ -27,10 +27,13 @@ import re
 
 import caffe
 import numpy as np
+import random
+from pprint import PrettyPrinter
 
 from argparse import ArgumentParser
 from inference.coco_detection_evaluator import CocoDetectionEvaluator
 from inference.face_label_map import category_map
+from inference.score import recognize_risk, score_model
 
 IMAGE_SIZE = 400
 # dataset is VOC2007 with person_test.txt
@@ -80,7 +83,42 @@ def parse_and_preprocess(serialized_example):
 
   image_id = features['image/source_id']
 
-  return bbox[0], label, None, image_id, features
+  return bbox[0], label, image_id, features
+
+def exec_evaluator(ground_truth_dicts, detect_dicts, image_id_gt_dict,
+total_iter, batch_size):
+  import sys
+  
+  if "numpy" in sys.modules:
+    del sys.modules["numpy"]
+  if "np" in sys.modules:
+    del sys.modules["np"]
+  import numpy as np
+  
+  def setUp():
+    np.round = round
+  
+  from inference.coco_detection_evaluator import CocoDetectionEvaluator
+
+  setUp()
+  
+  evaluator = CocoDetectionEvaluator()
+  for step in range(total_iter):
+    # add single ground truth info detected
+    # add single image info detected
+    if step in list(detect_dicts.keys()):
+      try:
+        evaluator.add_single_ground_truth_image_info(image_id_gt_dict[step], ground_truth_dicts[step])
+        evaluator.add_single_detected_image_info(image_id_gt_dict[step], detect_dicts[step])
+      except Exception as e:
+        raise e
+
+  if (step + 1) * batch_size >= COCO_NUM_VAL_IMAGES:
+    metrics = evaluator.evaluate()
+  
+  if metrics:
+    pp = PrettyPrinter(indent=4)
+    pp.pprint(metrics)
 
 class model_infer(object):
 
@@ -159,6 +197,33 @@ class model_infer(object):
       self.args.batch_size = 1
 
   # pnorm for color images
+  # def preprocess_bounding_box_images(self, images, bbox, image_source):
+  #   img = np.zeros((len(bbox),160,160,3))
+  #   for ii,box in enumerate(bbox):
+  #     ymin, xmin, ymax, xmax = box
+  #     i = images[ymin:ymax,xmin:xmax]
+  #     i = cv2.resize(i, (160,160))
+  #     img[ii] = i
+  #   return img
+
+  def filter_conventional_box_images(self, bbox):
+    boxes = []
+    for ii,box in enumerate(bbox):
+      left, top, width, height = box
+      if width > 70 and height > 70:
+        boxes.append(box)
+    return boxes
+
+  def preprocess_conventional_box_images(self, images, bbox, image_source):
+    img = np.zeros((len(bbox),3,224,224))
+    for ii,box in enumerate(bbox):
+      left, top, width, height = box
+      i = images[top:top+height,left:left+width]
+      i = cv2.resize(i, (224,224))
+      img[ii] = i.transpose((2,0,1))
+    return img
+
+  # pnorm for color images
   def preprocess_bounding_box_images(self, images, bbox, image_source):
     img = np.zeros((len(bbox),3,224,224))
     for ii,box in enumerate(bbox):
@@ -180,7 +245,18 @@ class model_infer(object):
 
   def get_output(self, input_blob):
     
-    return self.network.setInput(input_blob.astype(np.int8), self.in_blob_name)
+    self.network.setInput(input_blob.astype(np.int8), self.in_blob_name)
+    return self.network.forward()
+
+  def measure(self, features, risk_difference=0.05, significant=1, to_significant=5):
+    measure_scores = []
+    for ii in range(0,len(features),2):
+      risk_vector1 = score_model(1 / features[ii], significant, to_significant)
+      risk_vector2 = score_model(1 / features[ii+1], significant, to_significant)
+      measure_scores.append(
+        recognize_risk(risk_difference, risk_vector1, risk_vector2)
+      )
+    return measure_scores
 
   def load_graph(self):
     print("graph has been loaded using caffe..")
@@ -291,42 +367,97 @@ class model_infer(object):
 
   def accuracy_check(self):
     print("Inference for accuracy check.")
-    self.build_data_sess()
-    evaluator = CocoDetectionEvaluator()
-    # with tf.compat.v1.Session(graph=self.infer_graph, config=self.config) as sess:
-    iter = 0
-    while True:
-      print('Run {0} iter'.format(iter))
-      iter += 1
-      features, bbox, label, image_id, sess = self.get_input()
-      if features is None:
-          break
-      bbox = bbox.eval(session=sess)
-      label = label.eval(session=sess)
-      image_id = image_id.eval(session=sess)
-      ground_truth = {}
-      ground_truth['boxes'] = np.asarray(bbox)
-      label = [x if type(x) == 'str' else x.decode('utf-8') for x in label]
-      ground_truth['classes'] = np.asarray([x for x in label])
-      image_id = image_id[0] if type(image_id[0]) == 'str' else image_id[0].decode('utf-8')
-      evaluator.add_single_ground_truth_image_info(image_id, ground_truth)
-      num, boxes, scores, labels = sess.run(self.output_tensors, {self.input_tensor: input_images})
-      eval_image_augment_scores()
-      detection = {}
-      num = int(num[0])
-      detection['boxes'] = np.asarray(boxes[0])[0:num]
-      detection['scores'] = np.asarray(scores[0])[0:num]
-      detection['classes'] = np.asarray(labels[0])[0:num]
-      evaluator.add_single_detected_image_info(image_id, detection)
-      if iter * self.args.batch_size >= COCO_NUM_VAL_IMAGES:
-        evaluator.evaluate()
-        break
+    total_iter = COCO_NUM_VAL_IMAGES
+    fm = category_map
+    fm = dict(zip(list(fm.values()),list(fm.keys())))
+    print('total iteration is {0}'.format(str(total_iter)))
+    global model, graph
+    with tf.Session().as_default() as sess:
+      if self.args.data_location:
+        self.build_data_sess()
+      else:
+        raise Exception("no data location provided")
+      total_samples = 0
+      self.coord = tf.train.Coordinator()
+      tfrecord_paths = [self.args.data_location]
+      ds = tf.data.TFRecordDataset.list_files(tfrecord_paths)
+      ds = ds.apply(
+        parallel_interleave(
+          tf.data.TFRecordDataset, cycle_length=1, block_length=1,
+          buffer_output_elements=10000, prefetch_input_elements=10000))
+      ds = ds.prefetch(buffer_size=10000)
+      ds = ds.apply(
+          map_and_batch(
+            map_func=parse_and_preprocess,
+            batch_size=self.args.batch_size,
+            num_parallel_batches=1,
+            num_parallel_calls=None))
+      ds = ds.prefetch(buffer_size=10000)
+      ds_iterator = tf.data.make_one_shot_iterator(ds)
+      state = None
+      warmup_iter = 0
+      
+      self.ground_truth_dicts = {}
+      self.detect_dicts = {}
 
+      self.total_iter = total_iter
+      self.image_id_gt_dict = {}
+
+      if self.args.data_location:
+        image_batches = []
+        for step in range(total_iter):
+          bbox, label, image_id, features = ds_iterator.get_next()
+          features, bbox, label, image_id = \
+          tuple(features.items()), bbox, label, image_id
+          if features is None:
+            break
+          bbox, label, image_id = sess.run([bbox, label, image_id])
+
+          # ground truth of bounding boxes from pascal voc
+          ground_truth = {}
+          ground_truth['boxes'] = np.asarray(bbox[0])
+          label_gt = [fm[l] if type(l) == 'str' else fm[l.decode('utf-8')] for l in label]
+          image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
+          ground_truth['classes'] = np.array(label_gt*len(ground_truth['boxes']))
+          # saving all ground truth dictionaries
+          self.ground_truth_dicts[step] = ground_truth
+          self.image_id_gt_dict[step] = image_id_gt[0]
+
+          images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
+
+          try:
+            # detection for bounding boxes from pascal voc
+            detect = {}
+            label_det = label_gt
+            image_id_det = image_id_gt
+            output = self.get_output(np.expand_dims(images,0))
+            output = output[self.out_blob_name]
+
+            detect['boxes'] = np.asarray(boxes)
+            detect['classes'] = np.asarray(label_det*len(detect['boxes']))
+            measures = self.measure(features)
+            if measures[0][0]:
+              detect['scores'] = np.broadcast_to(np.mean(np.asarray(measures[0][1])),len(detect['boxes']))
+            elif np.mean(measures[0][1]) > 0:
+              detect['scores'] = np.broadcast_to(np.mean(np.asarray(measures[0][1])),len(detect['boxes']))
+            else:
+              detect['scores'] = np.broadcast_to(np.asarray([0]),len(detect['boxes']))
+            
+            self.detect_dicts[step] = detect
+          except Exception as e:
+            print(e.args)
+
+          if (step + 1) % 10 == 0:
+            print('steps = {0} step'.format(str(step)))
+          
   def run(self):
-    if self.args.benchmark_only:
-      self.run_benchmark()
-    elif self.args.accuracy_only:
+    if self.args.accuracy_only:
       self.accuracy_check()
+      exec_evaluator(self.ground_truth_dicts, 
+      self.detect_dicts, self.image_id_gt_dict, 
+      self.total_iter, self.args.batch_size)
+    elif self.args.benchmark_only:
+      self.run_benchmark()
 
 
 

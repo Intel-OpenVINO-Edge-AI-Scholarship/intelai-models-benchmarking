@@ -29,8 +29,13 @@ import caffe
 import numpy as np
 
 from argparse import ArgumentParser
+import random
+from pprint import PrettyPrinter
+
+from argparse import ArgumentParser
 from inference.coco_detection_evaluator import CocoDetectionEvaluator
 from inference.face_label_map import category_map
+from inference.score import recognize_risk, score_model
 
 IMAGE_SIZE = 400
 # dataset is VOC2007 with person_test.txt
@@ -154,9 +159,13 @@ class model_infer(object):
     self.config.use_per_session_threads = 1
 
     self.load_graph()
+    self.setUp()
 
     if self.args.batch_size == -1:
       self.args.batch_size = 1
+
+  def setUp(self):
+    np.round = round
 
   # pnorm for color images
   def preprocess_bounding_box_images(self, images, bbox, image_source):
@@ -292,36 +301,102 @@ class model_infer(object):
 
   def accuracy_check(self):
     print("Inference for accuracy check.")
-    self.build_data_sess()
-    evaluator = CocoDetectionEvaluator()
-    # with tf.compat.v1.Session(graph=self.infer_graph, config=self.config) as sess:
-    iter = 0
-    while True:
-      print('Run {0} iter'.format(iter))
-      iter += 1
-      features, bbox, label, image_id, sess = self.get_input()
-      if features is None:
-          break
-      bbox = bbox.eval(session=sess)
-      label = label.eval(session=sess)
-      image_id = image_id.eval(session=sess)
-      ground_truth = {}
-      ground_truth['boxes'] = np.asarray(bbox)
-      label = [x if type(x) == 'str' else x.decode('utf-8') for x in label]
-      ground_truth['classes'] = np.asarray([x for x in label])
-      image_id = image_id[0] if type(image_id[0]) == 'str' else image_id[0].decode('utf-8')
-      evaluator.add_single_ground_truth_image_info(image_id, ground_truth)
-      num, boxes, scores, labels = sess.run(self.output_tensors, {self.input_tensor: input_images})
-      eval_image_augment_scores()
-      detection = {}
-      num = int(num[0])
-      detection['boxes'] = np.asarray(boxes[0])[0:num]
-      detection['scores'] = np.asarray(scores[0])[0:num]
-      detection['classes'] = np.asarray(labels[0])[0:num]
-      evaluator.add_single_detected_image_info(image_id, detection)
-      if iter * self.args.batch_size >= COCO_NUM_VAL_IMAGES:
-        evaluator.evaluate()
-        break
+    total_iter = COCO_NUM_VAL_IMAGES
+    print('total iteration is {0}'.format(str(total_iter)))
+    global model, graph
+    with tf.Session().as_default() as sess:
+      if self.args.data_location:
+        self.build_data_sess()
+      else:
+        raise Exception("no data location provided")
+      evaluator = CocoDetectionEvaluator()
+      total_samples = 0
+      self.coord = tf.train.Coordinator()
+      tfrecord_paths = [self.args.data_location]
+      ds = tf.data.TFRecordDataset.list_files(tfrecord_paths)
+      ds = ds.apply(
+        parallel_interleave(
+          tf.data.TFRecordDataset, cycle_length=1, block_length=1,
+          buffer_output_elements=10000, prefetch_input_elements=10000))
+      ds = ds.prefetch(buffer_size=10000)
+      ds = ds.apply(
+          map_and_batch(
+            map_func=parse_and_preprocess,
+            batch_size=self.args.batch_size,
+            num_parallel_batches=1,
+            num_parallel_calls=None))
+      ds = ds.prefetch(buffer_size=10000)
+      ds_iterator = tf.data.make_one_shot_iterator(ds)
+      state = None
+      warmup_iter = 0
+      
+      data_bbox = {}
+      data_label = {}
+      data_image_id = {}
+      data_bbox_d = {}
+
+      if self.args.data_location:
+        image_batches = []
+        for step in range(total_iter):
+          bbox, label, image_id, features = ds_iterator.get_next()
+          features, bbox, label, image_id = \
+          tuple(features.items()), bbox, label, image_id
+          if features is None:
+            break
+          bbox, label, image_id = sess.run([bbox, label, image_id])
+
+          # ground truth of bounding boxes from pascal voc
+          ground_truth = {}
+          ground_truth['boxes'] = np.asarray(bbox[0])
+          label_gt = [l if type(l) == 'str' else l.decode('utf-8') for l in label]
+          image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
+          ground_truth['classes'] = np.array(label_gt)
+          try:
+            evaluator.add_single_ground_truth_image_info(image_id_gt[0], ground_truth)
+          except Exception as e:
+            pass
+
+          images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
+          
+          # object detection
+          try:
+            # ground truth bounding box
+            images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
+            total_samples += images_new.shape[0]
+
+            # detection for bounding boxes from pascal voc
+            detect = {}
+            label_det = label_gt
+            image_id_det = image_id_gt
+            
+            # detected conventional bounding box
+            detect['boxes'] = np.asarray(bbox[0])
+            detect['classes'] = np.asarray(label_det)
+            output = self.get_output(images_new)
+            output = output[self.out_blob_name]
+            measures = self.measure(output)
+            if measures[0][0]:
+              detect['scores'] = np.asarray([[measures[0][1]]])
+            elif measures[0][1] > 0:
+              detect['scores'] = np.asarray([[measures[0][1]]])
+            else:
+              detect['scores'] = np.asarray([[0]])
+            try:
+              evaluator.add_single_detected_image_info(image_id_det[0], detect)
+            except Exception as e:
+              pass
+          except Exception as e:
+            print(e.args)
+
+          if (step + 1) % 10 == 0:
+            print('steps = {0} step'.format(str(step)))
+          
+        if step * self.args.batch_size >= COCO_NUM_VAL_IMAGES:
+          metrics = evaluator.evaluate()
+        
+        if metrics:
+          pp = PrettyPrinter(indent=4)
+          pp.pprint(metrics)
 
   def run(self):
     if self.args.benchmark_only:

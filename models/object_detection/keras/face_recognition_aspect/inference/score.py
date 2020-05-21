@@ -15,9 +15,9 @@ def face_recognize_risk(risk_difference=None, risk_vector1=None, risk_vector2=No
     # measures closeness of the original bounding image with augmented image
     diff = np.abs(risk_vector1 - risk_vector2) / risk_vector1
     if np.prod(error.astype(np.int8)) == 1:
-        return True, 1 - np.mean(np.abs(diff))
+        return True, 1 - np.abs(diff) / len(diff)
     else:
-        return False, 1 - np.mean(np.abs(diff))
+        return False, 1 - np.abs(diff) / len(diff)
 
 def process_outputs(output, significant, to_significant):
     result = np.zeros_like(output)
