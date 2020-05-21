@@ -42,26 +42,28 @@ class ModelInitializer(BaseModelInitializer):
                 "{} {}".format(self.python_exe, benchmark_script)                                        
         set_env_var("OMP_NUM_THREADS", self.args.num_intra_threads)
 
+        self.command_prefix += " -i 1000"
+        self.command_prefix += " -w 200"
         self.command_prefix += " -a {0}".format(self.args.num_intra_threads)
         self.command_prefix += " -e {0}".format(self.args.num_inter_threads)
         if self.args.input_graph:
             self.command_prefix += " -g {0}".format(self.args.input_graph)
+        if self.args.input_weights:
+            self.command_prefix += " -weight {0}".format(self.args.input_weights)
         if self.args.risk_difference:
             self.command_prefix += " -rd {0}".format(self.args.risk_difference)
         if self.args.batch_size:
             self.command_prefix += " -b {0}".format(self.args.batch_size)
         if self.args.benchmark_only:
             self.command_prefix += " -bo {0}".format(self.args.benchmark_only)
-        if self.args.accuracy_only:
-            self.command_prefix += " -r {0}".format(self.args.accuracy_only)
         if self.args.data_location:
             self.command_prefix += " -d {0}".format(self.args.data_location)
         if self.args.annotations_dir:
             self.command_prefix += " --annotations_dir {0}".format(self.args.annotations_dir)
 
-        # if self.args.accuracy_only:
-        #     self.command_prefix += " -r"
-        assert self.args.data_location, "accuracy must provide the data."
+        if self.args.accuracy_only:
+            self.command_prefix += " -r"
+            assert self.args.data_location, "accuracy must provide the data."
 
     def run(self):
         # Run script from the tensorflow models research directory

@@ -758,19 +758,6 @@ function wide_deep_large_ds() {
     fi
 }
 
-# DenseNet 169 model
-function face_recognition_aspect() {
-  if [ ${PRECISION} == "fp32" ]; then
-      CMD="${CMD} $(add_arg "--input_height" ${input_height}) $(add_arg "--input_width" ${input_width}) \
-      $(add_arg "--warmup_steps" ${warmup_steps}) $(add_arg "--steps" ${steps}) $(add_arg "--input_layer" ${input_layer}) \
-      $(add_arg "--output_layer" ${output_layer})"
-      PYTHONPATH=${PYTHONPATH} CMD=${CMD} run_model
-  else
-    echo "PRECISION=${PRECISION} is not supported for ${MODEL_NAME}"
-    exit 1
-  fi
-}
-
 LOGFILE=${OUTPUT_DIR}/${LOG_FILENAME}
 echo "Log output location: ${LOGFILE}"
 
@@ -805,8 +792,6 @@ elif [ ${MODEL_NAME} == "wide_deep" ]; then
   wide_deep
 elif [ ${MODEL_NAME} == "wide_deep_large_ds" ]; then
   wide_deep_large_ds
-elif [ ${MODEL_NAME} == "face_recognition_aspect" ]; then
-  face_recognition_aspect
 else
   echo "Unsupported model: ${MODEL_NAME}"
   exit 1

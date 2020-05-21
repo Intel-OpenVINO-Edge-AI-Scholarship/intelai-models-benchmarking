@@ -167,6 +167,9 @@ class BaseBenchmarkUtil(object):
             "-g", "--in-graph", help="Full path to the input graph ",
             dest="input_graph", default=None, type=check_valid_filename)
 
+        self._common_arg_parser.add_argument(
+            "-weight", "--in-weights", help="Full path to the input weights ",
+            dest="input_weights", default=None, type=check_valid_filename)
 
         self._common_arg_parser.add_argument(
             "-k", "--benchmark-only",

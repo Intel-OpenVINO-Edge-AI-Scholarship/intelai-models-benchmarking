@@ -45,7 +45,6 @@ class CocoDetectionEvaluator:
             category_id_set=self._category_id_set,
             groundtruth_boxes=groundtruth_dict['boxes'],
             groundtruth_classes=groundtruth_dict['classes']))
-        
         self._annotation_id += groundtruth_dict['boxes'].shape[0]
         
         self._image_ids[image_id] = False

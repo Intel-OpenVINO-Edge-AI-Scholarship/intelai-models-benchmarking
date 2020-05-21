@@ -20,29 +20,17 @@
 from __future__ import division
 
 import tensorflow as tf
-# tf.enable_eager_execution()
 import time
-from keras.models import Sequential, load_model, Model
-from tensorflow.python.data.experimental import parallel_interleave
-from tensorflow.python.data.experimental import map_and_batch
 import cv2
-import cv2 as cv
 import PIL
-import subprocess
-import logging
-import pickle
-import signal
-import subprocess
-import random
-from pprint import PrettyPrinter
+import re
+
+import caffe
+import numpy as np
 
 from argparse import ArgumentParser
 from inference.coco_detection_evaluator import CocoDetectionEvaluator
 from inference.face_label_map import category_map
-from inference.metrics_face import ArcFace
-from inference import object_detection
-from augment.augment import rotate
-from inference.score import face_recognize_risk, score_model
 
 IMAGE_SIZE = 400
 # dataset is VOC2007 with person_test.txt
@@ -50,13 +38,8 @@ COCO_NUM_VAL_IMAGES = 2008
 
 import os
 os.environ['GLOG_minloglevel'] = '1'
-import threading
-import shutil
 
 import numpy as np
-
-backends = (cv.dnn.DNN_BACKEND_DEFAULT, cv.dnn.DNN_BACKEND_HALIDE, cv.dnn.DNN_BACKEND_INFERENCE_ENGINE, cv.dnn.DNN_BACKEND_OPENCV)
-targets = (cv.dnn.DNN_TARGET_CPU, cv.dnn.DNN_TARGET_OPENCL, cv.dnn.DNN_TARGET_OPENCL_FP16, cv.dnn.DNN_TARGET_MYRIAD)
 
 def bbox_aggregation(bbox_example):
   return bbox_example
@@ -97,10 +80,11 @@ def parse_and_preprocess(serialized_example):
 
   image_id = features['image/source_id']
 
-  return bbox[0], label, image_id, features
+  return bbox[0], label, None, image_id, features
 
+class model_infer(object):
 
-class model_infer:
+  need_reshape = False
 
   def __init__(self):
     arg_parser = ArgumentParser(description='Parse args')
@@ -124,10 +108,10 @@ class model_infer:
                             help='Specify the input graph.',
                             dest='input_graph', required=False)
 
-    arg_parser.add_argument('-met', "--method",
-                            help='Specify the method.',
-                            dest='method', default='pnorm', required=False)
-    
+    arg_parser.add_argument('-weight', "--input-weights",
+                            help='Specify the input weights.',
+                            dest='input_weights', required=True)
+
     arg_parser.add_argument('--annotations_dir', "--annotations_dir", help="Annotations dir", dest='imagesets_dir', 
                             required=False)
 
@@ -160,24 +144,6 @@ class model_infer:
     # parse the arguments
     self.args = arg_parser.parse_args()
 
-    self.param_dict = {
-      "framework": "tensorflow",
-      "thr": 0.4,
-      "model": "/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/nd131-openvino-people-counter-newui/models/opencv_dnn/opencv_face_detector_uint8.pb",
-      "backend": 3,
-      "async": self.args.batch_size,
-      "target": 0,
-      "classes": "",
-      "nms": 0.65,
-      "motion_tracker": False,
-      "inputs": "",
-      "input": None,
-      "scale": 1.0,
-      "mean": 1.0,
-      "rgb": False,
-      "config": "/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/nd131-openvino-people-counter-newui/models/opencv_dnn/opencv_face_detector.pbtxt",
-    }
-
     self.config_dict = dict()
     self.config_dict['ARCFACE_PREBATCHNORM_LAYER_INDEX']=-3
     self.config_dict['ARCFACE_POOLING_LAYER_INDEX']=-4
@@ -191,46 +157,35 @@ class model_infer:
 
     if self.args.batch_size == -1:
       self.args.batch_size = 1
-    self.args.batch_size = 1
 
   # pnorm for color images
   def preprocess_bounding_box_images(self, images, bbox, image_source):
-    img = np.zeros((len(bbox),160,160,3))
+    img = np.zeros((len(bbox),3,224,224))
     for ii,box in enumerate(bbox):
       ymin, xmin, ymax, xmax = box
       i = images[ymin:ymax,xmin:xmax]
-      i = cv2.resize(i, (160,160))
-      img[ii] = i
+      i = cv2.resize(i, (224,224))
+      img[ii] = i.transpose((2,0,1)) # preprocessing input to match caffe
     return img
 
-  def filter_conventional_box_images(self, bbox):
-    boxes = []
-    for ii,box in enumerate(bbox):
-      left, top, width, height = box
-      if width > 70 and height > 70:
-        boxes.append(box)
-    return boxes
+  def build_data_sess(self, in_blob_name="data", out_blob_name="softmaxout", need_reshape=False):
+    caffe.set_mode_cpu()
+    self.model = str(self.args.input_graph)
+    self.weights = str(self.args.input_weights)
 
-  def preprocess_conventional_box_images(self, images, bbox, image_source):
-    img = np.zeros((len(bbox),160,160,3))
-    for ii,box in enumerate(bbox):
-      left, top, width, height = box
-      i = images[top:top+height,left:left+width]
-      i = cv2.resize(i, (160,160))
-      img[ii] = i
-    return img
+    self.network = caffe.Net(self.model, self.weights, caffe.TEST)
+    self.in_blob_name = in_blob_name
+    self.out_blob_name = out_blob_name
+    self.need_reshape = need_reshape
+
+  def get_output(self, input_blob):
+    if self.need_reshape:
+      self.network.blobs[self.in_blob_name].reshape(*input_blob.shape)
     
-  def build_data_sess(self):
-    arcface_model = load_model(self.args.input_graph, custom_objects={'ArcFace': ArcFace})
-    if self.args.method == "pnorm":
-      self.arcface_model = Model(inputs=arcface_model.input[0], 
-      outputs=arcface_model.layers[self.config_dict['ARCFACE_POOLING_LAYER_INDEX']].output)
-    elif self.args.method == "lognorm":
-      self.arcface_model = Model(inputs=arcface_model.input[0], 
-      outputs=arcface_model.layers[self.config_dict['ARCFACE_PREBATCHNORM_LAYER_INDEX']].output)
+    return self.network.forward_all(**{self.in_blob_name: input_blob})[self.out_blob_name]
 
   def load_graph(self):
-    print("graph has been loaded using keras..")
+    print("graph has been loaded using caffe..")
 
   def run_benchmark(self):
     if self.args.data_location:
@@ -258,8 +213,7 @@ class model_infer:
         self.coord = tf.train.Coordinator()
         tfrecord_paths = [self.args.data_location]
         self.filename_queue = tf.train.string_input_producer(
-          tfrecord_paths, capacity=self.args.batch_size, name='created_poert')
-        # _, serialized_example = self.reader.read(self.filename_queue)
+          tfrecord_paths, capacity=self.args.batch_size, name='queue')
         state = None
         if self.args.data_location:
           image_batches = []
@@ -269,7 +223,7 @@ class model_infer:
               self.reader.restore_state(state)
             _, serialized_example = self.reader.read(self.filename_queue)
             self.threads = tf.train.start_queue_runners(sess=sess, coord = self.coord)
-            box, label, image_id, features = parse_and_preprocess(serialized_example)
+            box, label, part, image_id, features = parse_and_preprocess(serialized_example)
             features, bbox, label, parts, image_id = \
             tuple(features.items()), box, label, part, image_id
             if features is None:
@@ -292,7 +246,7 @@ class model_infer:
             # image_batches.append(images)
 
             # if len(image_batches) == self.args.batch_size:
-            arcface_features = self.arcface_model.predict(np.vstack(images), verbose=1)
+            output = self.get_output(np.vstack(images))
             
             end_time = time.time()
 
@@ -312,138 +266,68 @@ class model_infer:
 
             state = self.reader.serialize_state()
 
+
+          # if len(image_batches) == self.args.batch_size:
+          # image_batches = []
+
+        # self.coord.join(self.threads, stop_grace_period_secs=1)
+
+        # if len(image_batches) < self.args.batch_size:
+          # arcface_features = self.arcface_model.predict(np.vstack(image_batches), verbose=1)
+          # print ('Batchsize: {0}'.format(str(self.args.batch_size)))
+          # print ('Time spent per BATCH: {0:10.4f} ms'.format(ttime / total_samples * 1000))
+          # print ('Total samples/sec: {0:10.4f} samples/s'.format(total_samples * self.args.batch_size / ttime))
+          # print ('Total labeled samples: {0} person, {1} head'.format(
+          #   np.where(np.array(label)=="person")[0].shape[0], 
+          #   np.where(np.array(parts)=="head")[0].shape[0]))
+
         self.coord.request_stop()
         self.coord.join(self.threads)
-  
-  def face_detector(self, images, image_ids, batch_size):
-    return object_detection.main(self.param_dict, images)
 
-  def augment_images(self, images, greedy=0.69, angle=8, scale=1.0):
-    # flip image
-    result = np.zeros((len(images)*2,160,160,3))
-    for ii in range(0,len(images),1):
-      result[2*ii] = images[ii].copy()
-      if greedy > random.uniform(0.0, 1.0):
-        result[2*ii+1] = rotate(images[ii], angle=angle, scale=scale)
-      else:
-        result[2*ii+1] = cv2.flip(images[ii], 1)
-    return result
+  def get_input(self, sess):
+    box, label, part, image_id, features = parse_and_preprocess(serialized_example)
+    # self.threads = tf.train.start_queue_runners(sess=sess, coord = self.coord)
 
-  def measure(self, features, risk_difference=0.05, significant=1, to_significant=5):
-    measure_scores = []
-    for ii in range(0,len(features),2):
-      risk_vector1 = score_model(features[ii], significant, to_significant)
-      risk_vector2 = score_model(features[ii+1], significant, to_significant)
-      measure_scores.append(
-        face_recognize_risk(risk_difference, risk_vector1, risk_vector2)
-      )
-    return measure_scores
-  
+    return tuple(features.items()), box, label, part, image_id
+
   def accuracy_check(self):
     print("Inference for accuracy check.")
-    total_iter = 100
-    global model, graph
-    with tf.Session().as_default() as sess:
-      if self.args.data_location:
-        self.build_data_sess()
-      else:
-        raise Exception("no data location provided")
-      evaluator = CocoDetectionEvaluator()
-      total_samples = 0
-      self.coord = tf.train.Coordinator()
-      tfrecord_paths = [self.args.data_location]
-      ds = tf.data.TFRecordDataset.list_files(tfrecord_paths)
-      ds = ds.apply(
-        parallel_interleave(
-          tf.data.TFRecordDataset, cycle_length=1, block_length=1,
-          buffer_output_elements=10000, prefetch_input_elements=10000))
-      ds = ds.prefetch(buffer_size=10000)
-      ds = ds.apply(
-          map_and_batch(
-            map_func=parse_and_preprocess,
-            batch_size=self.args.batch_size,
-            num_parallel_batches=1,
-            num_parallel_calls=None))
-      ds = ds.prefetch(buffer_size=10000)
-      ds_iterator = tf.data.make_one_shot_iterator(ds)
-      state = None
-      warmup_iter = 0
-      
-      data_bbox = {}
-      data_label = {}
-      data_image_id = {}
-      data_bbox_d = {}
-
-      if self.args.data_location:
-        image_batches = []
-        for step in range(total_iter):
-          bbox, label, image_id, features = ds_iterator.get_next()
-          features, bbox, label, image_id = \
-          tuple(features.items()), bbox, label, image_id
-          if features is None:
-            break
-          bbox, label, image_id = sess.run([bbox, label, image_id])
-
-          # ground truth of bounding boxes from pascal voc
-          ground_truth = {}
-          ground_truth['boxes'] = np.asarray(bbox[0])
-          label_gt = [l if type(l) == 'str' else l.decode('utf-8') for l in label]
-          image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
-          ground_truth['classes'] = np.array(label_gt)
-          try:
-            evaluator.add_single_ground_truth_image_info(image_id_gt[0], ground_truth)
-          except Exception as e:
-            pass
-
-          images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
-          # face detection
-          boxes, confidences, classIds = self.face_detector(images, image_id_gt, self.args.batch_size)
-
-          boxes = self.filter_conventional_box_images(boxes)
-          if len(boxes) > 0:
-            # ground truth bounding box
-            images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
-            total_samples += images_new.shape[0]
-            images_new = self.augment_images(images_new)
-
-            # detection for bounding boxes from pascal voc
-            detect = {}
-            label_det = label_gt
-            image_id_det = image_id_gt
-            # detected conventional bounding box
-            images_sync = self.preprocess_conventional_box_images(images, boxes, image_id_det)
-            images_sync = self.augment_images(images_sync)
-
-            detect['boxes'] = np.asarray(boxes)
-            detect['classes'] = np.asarray(label_det)
-            features = self.arcface_model.predict(images_sync, verbose=1)
-            measures = self.measure(features)
-            if measures[0][0]:
-              detect['scores'] = np.asarray([[measures[0][1]]])
-            elif measures[0][1] > 0:
-              detect['scores'] = np.asarray([[measures[0][1]]])
-            else:
-              detect['scores'] = np.asarray([[0]])
-            try:
-              evaluator.add_single_detected_image_info(image_id_det[0], detect)
-            except Exception as e:
-              pass
-
-          if (step + 1) % 10 == 0:
-            print('steps = {0} step'.format(str(step)))
-          
-        if step * self.args.batch_size >= COCO_NUM_VAL_IMAGES:
-          metrics = evaluator.evaluate()
-        
-        if metrics:
-          pp = PrettyPrinter(indent=4)
-          pp.pprint(metrics)
+    self.build_data_sess()
+    evaluator = CocoDetectionEvaluator()
+    # with tf.compat.v1.Session(graph=self.infer_graph, config=self.config) as sess:
+    iter = 0
+    while True:
+      print('Run {0} iter'.format(iter))
+      iter += 1
+      features, bbox, label, image_id, sess = self.get_input()
+      if features is None:
+          break
+      bbox = bbox.eval(session=sess)
+      label = label.eval(session=sess)
+      image_id = image_id.eval(session=sess)
+      ground_truth = {}
+      ground_truth['boxes'] = np.asarray(bbox)
+      label = [x if type(x) == 'str' else x.decode('utf-8') for x in label]
+      ground_truth['classes'] = np.asarray([x for x in label])
+      image_id = image_id[0] if type(image_id[0]) == 'str' else image_id[0].decode('utf-8')
+      evaluator.add_single_ground_truth_image_info(image_id, ground_truth)
+      num, boxes, scores, labels = sess.run(self.output_tensors, {self.input_tensor: input_images})
+      eval_image_augment_scores()
+      detection = {}
+      num = int(num[0])
+      detection['boxes'] = np.asarray(boxes[0])[0:num]
+      detection['scores'] = np.asarray(scores[0])[0:num]
+      detection['classes'] = np.asarray(labels[0])[0:num]
+      evaluator.add_single_detected_image_info(image_id, detection)
+      if iter * self.args.batch_size >= COCO_NUM_VAL_IMAGES:
+        evaluator.evaluate()
+        break
 
   def run(self):
-    if self.args.accuracy_only:
-      self.accuracy_check()
-    elif self.args.benchmark_only:
+    if self.args.benchmark_only:
       self.run_benchmark()
+    elif self.args.accuracy_only:
+      self.accuracy_check()
 
 
 

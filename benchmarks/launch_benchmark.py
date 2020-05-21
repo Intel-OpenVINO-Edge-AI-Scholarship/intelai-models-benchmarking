@@ -223,6 +223,7 @@ class LaunchBenchmark(base_benchmark_util.BaseBenchmarkUtil):
         workspace = os.path.join(benchmark_scripts, "common", args.framework)
         mount_benchmark = benchmark_scripts
         in_graph_path = args.input_graph
+        in_graph_weights = args.input_weights
         checkpoint_path = args.checkpoint
         dataset_path = args.data_location
 
@@ -235,6 +236,9 @@ class LaunchBenchmark(base_benchmark_util.BaseBenchmarkUtil):
 
         if in_graph_path:
             env_var_dict["IN_GRAPH"] = in_graph_path
+
+        if in_graph_weights:
+            env_var_dict["IN_WEIGHTS"] = in_graph_weights
 
         if checkpoint_path:
             env_var_dict["CHECKPOINT_DIRECTORY"] = checkpoint_path

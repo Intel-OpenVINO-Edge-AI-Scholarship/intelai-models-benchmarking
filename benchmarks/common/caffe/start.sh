@@ -71,8 +71,17 @@ if [[ ${NOINSTALL} != "True" ]]; then
   pip install --upgrade pip
   pip install requests
 
-  echo "Installing keras requirements..\n"
+  echo "Installing caffe requirements..\n"
   # pip install -r common/requirements.txt
+
+  echo "Check whether the caffe model is present..\n"
+
+  # OUTPUT=$(/usr/bin/python3.6 -c "import caffe; print('abcd')")
+  # if [ "${OUTPUT}" -eq "abcd" ]; then
+  #   echo "Caffe Python Module is available..\n"
+  # else
+  #   echo "Caffe Python Module is not available..\n"
+  # fi
 
   # install google-perftools for tcmalloc
   if [[ ${DISABLE_TCMALLOC} != "True" ]]; then
@@ -770,8 +779,34 @@ function wide_deep_large_ds() {
     fi
 }
 
-# DenseNet 169 model
+# ArcFace Face Detection Model
 function face_recognition_aspect() {
+  if [ ${PRECISION} == "fp32" ]; then
+      CMD="${CMD} $(add_arg "--input_height" ${input_height}) $(add_arg "--input_width" ${input_width}) \
+      $(add_arg "--warmup_steps" ${warmup_steps}) $(add_arg "--steps" ${steps}) $(add_arg "--input_layer" ${input_layer}) \
+      $(add_arg "--output_layer" ${output_layer})"
+      PYTHONPATH=${PYTHONPATH} CMD=${CMD} run_model
+  else
+    echo "PRECISION=${PRECISION} is not supported for ${MODEL_NAME}"
+    exit 1
+  fi
+}
+
+# Detection Probability / Softmax
+function detection_softmax() {
+  if [ ${PRECISION} == "fp32" ]; then
+      CMD="${CMD} $(add_arg "--input_height" ${input_height}) $(add_arg "--input_width" ${input_width}) \
+      $(add_arg "--warmup_steps" ${warmup_steps}) $(add_arg "--steps" ${steps}) $(add_arg "--input_layer" ${input_layer}) \
+      $(add_arg "--output_layer" ${output_layer})"
+      PYTHONPATH=${PYTHONPATH} CMD=${CMD} run_model
+  else
+    echo "PRECISION=${PRECISION} is not supported for ${MODEL_NAME}"
+    exit 1
+  fi
+}
+
+# Detection SSD
+function ssd_squeezenet() {
   if [ ${PRECISION} == "fp32" ]; then
       CMD="${CMD} $(add_arg "--input_height" ${input_height}) $(add_arg "--input_width" ${input_width}) \
       $(add_arg "--warmup_steps" ${warmup_steps}) $(add_arg "--steps" ${steps}) $(add_arg "--input_layer" ${input_layer}) \
@@ -819,6 +854,10 @@ elif [ ${MODEL_NAME} == "wide_deep_large_ds" ]; then
   wide_deep_large_ds
 elif [ ${MODEL_NAME} == "face_recognition_aspect" ]; then
   face_recognition_aspect
+elif [ ${MODEL_NAME} == "detection_softmax" ]; then
+  detection_softmax
+elif [ ${MODEL_NAME} == "ssd_squeezenet" ]; then
+  ssd_squeezenet
 else
   echo "Unsupported model: ${MODEL_NAME}"
   exit 1
