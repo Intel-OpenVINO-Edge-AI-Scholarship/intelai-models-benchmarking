@@ -99,8 +99,10 @@ class CocoDetectionEvaluator:
         box_metrics, box_per_category_ap = box_evaluator.ComputeMetrics(
             include_metrics_per_category=False,
             all_metrics_per_category=False)
+        box_metrics1 = {'DetectionBoxes_'+ key: value
+                       for key, value in iter(box_metrics.items())}
         box_metrics.update(box_per_category_ap)
         box_metrics = {'DetectionBoxes_'+ key: value
                        for key, value in iter(box_metrics.items())}
-        return box_metrics
+        return box_metrics, box_metrics1
     

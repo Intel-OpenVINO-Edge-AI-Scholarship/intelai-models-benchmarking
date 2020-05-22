@@ -127,11 +127,12 @@ total_iter, batch_size):
         raise e
 
   if (step + 1) * batch_size >= COCO_NUM_VAL_IMAGES:
-    metrics = evaluator.evaluate()
+    metrics, metrics1 = evaluator.evaluate()
   
   if metrics:
     pp = PrettyPrinter(indent=4)
     pp.pprint(metrics)
+    pp.pprint(metrics1)
 
 class model_infer:
 

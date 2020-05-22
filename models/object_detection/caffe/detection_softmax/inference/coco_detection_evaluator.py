@@ -28,7 +28,7 @@ class CocoDetectionEvaluator:
         self._groundtruth_list = []
         self._detection_boxes_list = []
         self._annotation_id = 1
-        self._category_id_set = set([cat for cat in face_label_map.category_map])
+        self._category_id_set = set([cat for cat in face_label_map.category_map.keys()])
         self._groundtruth_list = []
         self._detection_boxes_list = []
 
@@ -45,6 +45,7 @@ class CocoDetectionEvaluator:
             category_id_set=self._category_id_set,
             groundtruth_boxes=groundtruth_dict['boxes'],
             groundtruth_classes=groundtruth_dict['classes']))
+        
         self._annotation_id += groundtruth_dict['boxes'].shape[0]
         
         self._image_ids[image_id] = False
@@ -98,8 +99,10 @@ class CocoDetectionEvaluator:
         box_metrics, box_per_category_ap = box_evaluator.ComputeMetrics(
             include_metrics_per_category=False,
             all_metrics_per_category=False)
+        box_metrics1 = {'DetectionBoxes_'+ key: value
+                       for key, value in iter(box_metrics.items())}
         box_metrics.update(box_per_category_ap)
         box_metrics = {'DetectionBoxes_'+ key: value
                        for key, value in iter(box_metrics.items())}
-        return box_metrics
+        return box_metrics, box_metrics1
     

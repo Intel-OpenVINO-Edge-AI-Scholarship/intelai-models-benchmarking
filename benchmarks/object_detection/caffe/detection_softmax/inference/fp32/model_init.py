@@ -52,6 +52,8 @@ class ModelInitializer(BaseModelInitializer):
             self.command_prefix += " -weight {0}".format(self.args.input_weights)
         if self.args.risk_difference:
             self.command_prefix += " -rd {0}".format(self.args.risk_difference)
+        if self.args.accuracy_only:
+            self.command_prefix += " -r {0}".format(self.args.accuracy_only)
         if self.args.batch_size:
             self.command_prefix += " -b {0}".format(self.args.batch_size)
         if self.args.benchmark_only:
@@ -61,8 +63,8 @@ class ModelInitializer(BaseModelInitializer):
         if self.args.annotations_dir:
             self.command_prefix += " --annotations_dir {0}".format(self.args.annotations_dir)
 
-        if self.args.accuracy_only:
-            self.command_prefix += " -r"
+        # if self.args.accuracy_only:
+        #     self.command_prefix += " -r"
             assert self.args.data_location, "accuracy must provide the data."
 
     def run(self):

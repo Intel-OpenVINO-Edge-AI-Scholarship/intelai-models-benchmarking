@@ -29,6 +29,7 @@ import caffe
 import numpy as np
 import random
 from pprint import PrettyPrinter
+from copy import copy
 
 from argparse import ArgumentParser
 from inference.coco_detection_evaluator import CocoDetectionEvaluator
@@ -206,6 +207,21 @@ class model_infer(object):
   #     img[ii] = i
   #   return img
 
+  def preprocess_bounding_box_ssd(self, result, confidence_level=0.5):
+    identified = False
+    boxes = []
+    confs = []
+    for box in result[0][0]: # Output shape is 1x1x100x7
+        conf = box[2]
+        if conf >= confidence_level:
+            xmin = int(box[3] * width)
+            ymin = int(box[4] * height)
+            xmax = int(box[5] * width)
+            ymax = int(box[6] * height)
+            boxes.append([xmin, ymin, xmax, ymax])
+            confs.append(conf)
+    return boxes, confs
+
   def filter_conventional_box_images(self, bbox):
     boxes = []
     for ii,box in enumerate(bbox):
@@ -377,6 +393,7 @@ class model_infer(object):
         self.build_data_sess()
       else:
         raise Exception("no data location provided")
+      evaluator = CocoDetectionEvaluator()
       total_samples = 0
       self.coord = tf.train.Coordinator()
       tfrecord_paths = [self.args.data_location]
@@ -399,7 +416,6 @@ class model_infer(object):
       
       self.ground_truth_dicts = {}
       self.detect_dicts = {}
-
       self.total_iter = total_iter
       self.image_id_gt_dict = {}
 
@@ -422,27 +438,26 @@ class model_infer(object):
           # saving all ground truth dictionaries
           self.ground_truth_dicts[step] = ground_truth
           self.image_id_gt_dict[step] = image_id_gt[0]
-
           images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
-
+          
+          # object detection
           try:
-            # detection for bounding boxes from pascal voc
-            detect = {}
-            label_det = label_gt
-            image_id_det = image_id_gt
-            output = self.get_output(np.expand_dims(images,0))
-            output = output[self.out_blob_name]
+            # ground truth bounding box
+            images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
+            total_samples += images_new.shape[0]
 
+            # detected conventional bounding box same as ground truth bounding boxes
+            output = self.get_output(images_new)
+            boxes, confs = self.preprocess_bounding_box_ssd(output)
             detect['boxes'] = np.asarray(boxes)
             detect['classes'] = np.asarray(label_det*len(detect['boxes']))
-            measures = self.measure(features)
-            if measures[0][0]:
-              detect['scores'] = np.broadcast_to(np.mean(np.asarray(measures[0][1])),len(detect['boxes']))
-            elif np.mean(measures[0][1]) > 0:
-              detect['scores'] = np.broadcast_to(np.mean(np.asarray(measures[0][1])),len(detect['boxes']))
-            else:
-              detect['scores'] = np.broadcast_to(np.asarray([0]),len(detect['boxes']))
+
+            # detection for bounding boxes from pascal voc
+            detect = copy(ground_truth)
+            label_det = label_gt
             
+            # 1, 1000, 1, 1
+            detect['scores'] = np.asarray([confs])
             self.detect_dicts[step] = detect
           except Exception as e:
             print(e.args)
