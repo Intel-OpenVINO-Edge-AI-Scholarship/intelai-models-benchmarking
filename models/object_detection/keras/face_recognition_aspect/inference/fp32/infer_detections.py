@@ -134,6 +134,8 @@ total_iter, batch_size):
     pp.pprint(metrics)
     pp.pprint(metrics1)
 
+  pp.pprint(detect_dicts)
+
 class model_infer:
 
   def __init__(self):

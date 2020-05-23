@@ -33,6 +33,7 @@ from argparse import ArgumentParser
 import random
 from pprint import PrettyPrinter
 import threading
+from tqdm import tqdm
 
 from argparse import ArgumentParser
 from inference.coco_detection_evaluator import CocoDetectionEvaluator
@@ -125,6 +126,8 @@ total_iter, batch_size):
     pp = PrettyPrinter(indent=4)
     pp.pprint(metrics)
     pp.pprint(metrics1)
+
+  pp.pprint(detect_dicts)
 
 class model_infer(object):
 
@@ -355,6 +358,7 @@ class model_infer(object):
     fm = dict(zip(list(fm.values()),list(fm.keys())))
     print('total iteration is {0}'.format(str(total_iter)))
     global model, graph
+    result = []
     with tf.Session().as_default() as sess:
       if self.args.data_location:
         self.build_data_sess(need_reshape=True)
@@ -389,18 +393,15 @@ class model_infer(object):
 
       if self.args.data_location:
         image_batches = []
-        threads = []
         
         obj = self
-        for idx in range(break_session):
-          t = threading.Thread(target=run_ice_breaker_session, 
-          args=(ds_iterator, obj, fm, sess, total_iter, break_session, idx))
-          t.start()
-          threads.append(t)
+        for idx in tqdm(range(total_iter)):
+          bbox, label, image_id, features = ds_iterator.get_next()
+          result.append((bbox, label, image_id, features))
         
-        for t in threads:
-          t.join()
-
+    for idx in tqdm(range(total_iter)):
+      run_ice_breaker_session(result, obj, fm, sess, total_iter, break_session, idx)
+        
   def run(self):
     if self.args.accuracy_only:
       self.accuracy_check()
@@ -410,47 +411,47 @@ class model_infer(object):
     elif self.args.benchmark_only:
       self.run_benchmark()
 
-def run_ice_breaker_session(ds_iterator, obj, fm, sess, total_iter, break_session, idx):
-  for step in range(idx, break_session*idx + int(total_iter/break_session)):
-    bbox, label, image_id, features = ds_iterator.get_next()
-    features, bbox, label, image_id = \
-    tuple(features.items()), bbox, label, image_id
-    if features is None:
-      break
-    bbox, label, image_id = sess.run([bbox, label, image_id])
+def run_ice_breaker_session(result, obj, fm, sess, total_iter, break_session, idx):
+  bbox, label, image_id, features = result[idx]
+  step = idx
+  features, bbox, label, image_id = \
+  tuple(features.items()), bbox, label, image_id
+  if features is None:
+    return
+  bbox, label, image_id = sess.run([bbox, label, image_id])
 
-    # ground truth of bounding boxes from pascal voc
-    ground_truth = {}
-    ground_truth['boxes'] = np.asarray(bbox[0])
-    label_gt = [fm[l] if type(l) == 'str' else fm[l.decode('utf-8')] for l in label]
-    image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
-    ground_truth['classes'] = np.array(label_gt*len(ground_truth['boxes']))
-    # saving all ground truth dictionaries
-    obj.ground_truth_dicts[step] = ground_truth
-    obj.image_id_gt_dict[step] = image_id_gt[0]
-    images = np.asarray(PIL.Image.open(os.path.join(obj.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
-    
-    # object detection
-    try:
-      # ground truth bounding box
-      images_new = obj.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
+  # ground truth of bounding boxes from pascal voc
+  ground_truth = {}
+  ground_truth['boxes'] = np.asarray(bbox[0])
+  label_gt = [fm[l] if type(l) == 'str' else fm[l.decode('utf-8')] for l in label]
+  image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
+  ground_truth['classes'] = np.array(label_gt*len(ground_truth['boxes']))
+  # saving all ground truth dictionaries
+  obj.ground_truth_dicts[step] = ground_truth
+  obj.image_id_gt_dict[step] = image_id_gt[0]
+  images = np.asarray(PIL.Image.open(os.path.join(obj.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
+  
+  # object detection
+  try:
+    # ground truth bounding box
+    images_new = obj.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
 
-      # detection for bounding boxes from pascal voc
-      detect = copy(ground_truth)
-      label_det = label_gt
-      image_id_det = image_id_gt
+    # detection for bounding boxes from pascal voc
+    detect = copy(ground_truth)
+    label_det = label_gt
+    image_id_det = image_id_gt
 
-      # detected conventional bounding box same as ground truth bounding boxes
-      output = obj.get_output(images_new)
-      # 1, 1000, 1, 1
-      output = obj.lognorm(output[0,:,0,0])
-      detect['scores'] = np.broadcast_to(np.asarray(output), len(detect['boxes']))
-      obj.detect_dicts[step] = detect
-    except Exception as e:
-      print(e.args)
+    # detected conventional bounding box same as ground truth bounding boxes
+    output = obj.get_output(images_new)
+    # 1, 1000, 1, 1
+    output = obj.lognorm(output[0,:,0,0])
+    detect['scores'] = np.broadcast_to(np.asarray(output), len(detect['boxes']))
+    obj.detect_dicts[step] = detect
+  except Exception as e:
+    print(e.args)
 
-    if (step) % 2 == 0:
-      print('steps = {0} step'.format(str(step)))
+  if (idx) % 10 == 0:
+    print('steps = {0} step'.format(str(step)))
 
 if __name__ == "__main__":
   infer = model_infer()

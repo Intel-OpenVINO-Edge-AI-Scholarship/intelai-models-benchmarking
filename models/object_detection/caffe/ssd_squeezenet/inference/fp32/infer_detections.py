@@ -30,11 +30,13 @@ import numpy as np
 import random
 from pprint import PrettyPrinter
 from copy import copy
+from tqdm import tqdm
 
 from argparse import ArgumentParser
 from inference.coco_detection_evaluator import CocoDetectionEvaluator
 from inference.face_label_map import category_map
-from inference.score import recognize_risk, score_model
+from tensorflow.python.data.experimental import parallel_interleave
+from tensorflow.python.data.experimental import map_and_batch
 
 IMAGE_SIZE = 400
 # dataset is VOC2007 with person_test.txt
@@ -108,11 +110,8 @@ total_iter, batch_size):
     # add single ground truth info detected
     # add single image info detected
     if step in list(detect_dicts.keys()):
-      try:
-        evaluator.add_single_ground_truth_image_info(image_id_gt_dict[step], ground_truth_dicts[step])
-        evaluator.add_single_detected_image_info(image_id_gt_dict[step], detect_dicts[step])
-      except Exception as e:
-        raise e
+      evaluator.add_single_ground_truth_image_info(image_id_gt_dict[step], ground_truth_dicts[step])
+      evaluator.add_single_detected_image_info(image_id_gt_dict[step], detect_dicts[step])
 
   if (step + 1) * batch_size >= COCO_NUM_VAL_IMAGES:
     metrics = evaluator.evaluate()
@@ -120,6 +119,8 @@ total_iter, batch_size):
   if metrics:
     pp = PrettyPrinter(indent=4)
     pp.pprint(metrics)
+
+  pp.pprint(detect_dicts)
 
 class model_infer(object):
 
@@ -193,6 +194,7 @@ class model_infer(object):
     self.config.use_per_session_threads = 1
 
     self.load_graph()
+    self.setUp()
 
     if self.args.batch_size == -1:
       self.args.batch_size = 1
@@ -207,10 +209,14 @@ class model_infer(object):
   #     img[ii] = i
   #   return img
 
-  def preprocess_bounding_box_ssd(self, result, confidence_level=0.5):
+  def setUp(self):
+    np.round = round
+  
+  def preprocess_bounding_box_ssd(self, images, result, confidence_level=0.5):
     identified = False
     boxes = []
     confs = []
+    height, width, _ = images[0].shape
     for box in result[0][0]: # Output shape is 1x1x100x7
         conf = box[2]
         if conf >= confidence_level:
@@ -263,16 +269,6 @@ class model_infer(object):
     
     self.network.setInput(input_blob.astype(np.int8), self.in_blob_name)
     return self.network.forward()
-
-  def measure(self, features, risk_difference=0.05, significant=1, to_significant=5):
-    measure_scores = []
-    for ii in range(0,len(features),2):
-      risk_vector1 = score_model(1 / features[ii], significant, to_significant)
-      risk_vector2 = score_model(1 / features[ii+1], significant, to_significant)
-      measure_scores.append(
-        recognize_risk(risk_difference, risk_vector1, risk_vector2)
-      )
-    return measure_scores
 
   def load_graph(self):
     print("graph has been loaded using caffe..")
@@ -387,6 +383,8 @@ class model_infer(object):
     fm = category_map
     fm = dict(zip(list(fm.values()),list(fm.keys())))
     print('total iteration is {0}'.format(str(total_iter)))
+    result = []
+    break_session = 251
     global model, graph
     with tf.Session().as_default() as sess:
       if self.args.data_location:
@@ -419,52 +417,15 @@ class model_infer(object):
       self.total_iter = total_iter
       self.image_id_gt_dict = {}
 
+      obj = self
       if self.args.data_location:
-        image_batches = []
-        for step in range(total_iter):
+        for idx in tqdm(range(total_iter)):
           bbox, label, image_id, features = ds_iterator.get_next()
-          features, bbox, label, image_id = \
-          tuple(features.items()), bbox, label, image_id
-          if features is None:
-            break
-          bbox, label, image_id = sess.run([bbox, label, image_id])
-
-          # ground truth of bounding boxes from pascal voc
-          ground_truth = {}
-          ground_truth['boxes'] = np.asarray(bbox[0])
-          label_gt = [fm[l] if type(l) == 'str' else fm[l.decode('utf-8')] for l in label]
-          image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
-          ground_truth['classes'] = np.array(label_gt*len(ground_truth['boxes']))
-          # saving all ground truth dictionaries
-          self.ground_truth_dicts[step] = ground_truth
-          self.image_id_gt_dict[step] = image_id_gt[0]
-          images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
+          result.append((bbox, label, image_id, features))
           
-          # object detection
-          try:
-            # ground truth bounding box
-            images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
-            total_samples += images_new.shape[0]
+      for idx in tqdm(range(total_iter)):
+        run_ice_breaker_session(result, obj, fm, sess, total_iter, idx)
 
-            # detected conventional bounding box same as ground truth bounding boxes
-            output = self.get_output(images_new)
-            boxes, confs = self.preprocess_bounding_box_ssd(output)
-            detect['boxes'] = np.asarray(boxes)
-            detect['classes'] = np.asarray(label_det*len(detect['boxes']))
-
-            # detection for bounding boxes from pascal voc
-            detect = copy(ground_truth)
-            label_det = label_gt
-            
-            # 1, 1000, 1, 1
-            detect['scores'] = np.asarray([confs])
-            self.detect_dicts[step] = detect
-          except Exception as e:
-            print(e.args)
-
-          if (step + 1) % 10 == 0:
-            print('steps = {0} step'.format(str(step)))
-          
   def run(self):
     if self.args.accuracy_only:
       self.accuracy_check()
@@ -474,7 +435,48 @@ class model_infer(object):
     elif self.args.benchmark_only:
       self.run_benchmark()
 
+def run_ice_breaker_session(result, obj, fm, sess, total_iter, idx):
+  bbox, label, image_id, features = result[idx]
+  step = idx
+  features, bbox, label, image_id = \
+  tuple(features.items()), bbox, label, image_id
+  if features is None:
+    return
+  bbox, label, image_id = sess.run([bbox, label, image_id])
 
+  # ground truth of bounding boxes from pascal voc
+  ground_truth = {}
+  ground_truth['boxes'] = np.asarray(bbox[0])
+  label_gt = [fm[l] if type(l) == 'str' else fm[l.decode('utf-8')] for l in label]
+  image_id_gt = [i if type(i) == 'str' else i.decode('utf-8') for i in image_id]
+  ground_truth['classes'] = np.array(label_gt*len(ground_truth['boxes']))
+  # saving all ground truth dictionaries
+  images = np.asarray(PIL.Image.open(os.path.join(obj.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
+  
+  images = cv2.resize(images, (224,224))
+  images = images.transpose((2,0,1))
+  images = np.expand_dims(images,0)
+  # object detection
+  detect = copy(ground_truth)
+
+  # detection for bounding boxes from pascal voc
+  label_det = label_gt
+
+  # detected conventional bounding box same as ground truth bounding boxes
+  output = obj.get_output(images)
+  boxes, confs = obj.preprocess_bounding_box_ssd(images, output)
+  if len(boxes) > 0:
+    detect['boxes'] = np.asarray(boxes)
+    detect['classes'] = np.asarray(label_det*len(detect['boxes']))
+
+    # 1, 1000, 1, 1
+    detect['scores'] = np.asarray(confs)
+    obj.detect_dicts[step] = detect
+    obj.ground_truth_dicts[step] = ground_truth
+    obj.image_id_gt_dict[step] = image_id_gt[0]
+
+  if (idx) % 10 == 0:
+    print('steps = {0} step'.format(str(step)))
 
 if __name__ == "__main__":
   infer = model_infer()
