@@ -53,6 +53,17 @@ import threading
 import shutil
 
 import numpy as np
+from collections import namedtuple
+from network.feed_network import load_to_IE, run
+
+LOGNORM_EXT = "/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/nd131-openvino-people-counter-newui/custom_layers/cl_lognorm/user_ie_extensions/cpu/build/liblognorm_cpu_extension.so"
+PNORM_EXT = "/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/nd131-openvino-people-counter-newui/custom_layers/arcface/cl_pnorm/user_ie_extensions/cpu/build/libpnorm_cpu_extension.so"
+
+PNORM_XML = "/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/nd131-openvino-people-counter-newui/models/face_recognizer_pnorm_cl/CustomLayerBindings.xml"
+
+PNORM_MODEL = "/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/nd131-openvino-people-counter-newui/models/face_recognizer_pnorm_cl/arcface.xml"
+LOGNORM_MODEL = "/home/aswin/Documents/Courses/Udacity/Intel-Edge-Phase2/Projects/People-Counter-App/Repository/nd131-openvino-people-counter-newui/models/face_recognizer_lognorm_cl/arcface.xml"
+
 
 backends = (cv.dnn.DNN_BACKEND_DEFAULT, cv.dnn.DNN_BACKEND_HALIDE, cv.dnn.DNN_BACKEND_INFERENCE_ENGINE, cv.dnn.DNN_BACKEND_OPENCV)
 targets = (cv.dnn.DNN_TARGET_CPU, cv.dnn.DNN_TARGET_OPENCL, cv.dnn.DNN_TARGET_OPENCL_FP16, cv.dnn.DNN_TARGET_MYRIAD)
@@ -230,8 +241,11 @@ class model_infer:
     self.args.batch_size = 1
 
   # pnorm for color images
-  def preprocess_bounding_box_images(self, images, bbox, image_source):
-    img = np.zeros((len(bbox),160,160,3))
+  def preprocess_bounding_box_images(self, images, bbox, image_source, grayscale=False):
+    if grayscale:
+      img = np.zeros((len(bbox),160,160))
+    else:
+      img = np.zeros((len(bbox),160,160,3))
     for ii,box in enumerate(bbox):
       ymin, xmin, ymax, xmax = box
       i = images[ymin:ymax,xmin:xmax]
@@ -247,23 +261,34 @@ class model_infer:
         boxes.append(box)
     return boxes
 
-  def preprocess_conventional_box_images(self, images, bbox, image_source):
-    img = np.zeros((len(bbox),160,160,3))
+  def preprocess_conventional_box_images(self, images, bbox, image_source, grayscale=False):
+    if grayscale:
+      img = np.zeros((len(bbox),160,160))
+    else:
+      img = np.zeros((len(bbox),160,160,3))
     for ii,box in enumerate(bbox):
       left, top, width, height = box
       i = images[top:top+height,left:left+width]
-      i = cv2.resize(i, (160,160))
-      img[ii] = i
+      if np.prod(i.shape).astype(int):
+        i = cv2.resize(i, (160,160))
+        img[ii] = i
     return img
     
   def build_data_sess(self):
-    arcface_model = load_model(self.args.input_graph, custom_objects={'ArcFace': ArcFace})
-    if self.args.method == "pnorm":
-      self.arcface_model = Model(inputs=arcface_model.input[0], 
-      outputs=arcface_model.layers[self.config_dict['ARCFACE_POOLING_LAYER_INDEX']].output)
-    elif self.args.method == "lognorm":
-      self.arcface_model = Model(inputs=arcface_model.input[0], 
-      outputs=arcface_model.layers[self.config_dict['ARCFACE_PREBATCHNORM_LAYER_INDEX']].output)
+    if False:
+      arcface_model = load_model(self.args.input_graph, custom_objects={'ArcFace': ArcFace})
+      if self.args.method == "pnorm":
+        self.arcface_model = Model(inputs=arcface_model.input[0], 
+        outputs=arcface_model.layers[self.config_dict['ARCFACE_POOLING_LAYER_INDEX']].output)
+      elif self.args.method == "lognorm":
+        self.arcface_model = Model(inputs=arcface_model.input[0], 
+        outputs=arcface_model.layers[self.config_dict['ARCFACE_PREBATCHNORM_LAYER_INDEX']].output)
+    else:
+      ir_model = load_to_IE("CPU", LOGNORM_EXT, "", 0.5, 
+      LOGNORM_MODEL)
+      model = namedtuple('model', ['predict'])
+      self.arcface_model = model(run)
+      return ir_model
 
   def load_graph(self):
     print("graph has been loaded using keras..")
@@ -328,7 +353,7 @@ class model_infer:
             # image_batches.append(images)
 
             # if len(image_batches) == self.args.batch_size:
-            arcface_features = self.arcface_model.predict(np.vstack(images), verbose=1)
+            arcface_features = self.arcface_model.predict(np.vstack(images), verbose=0)
             
             end_time = time.time()
 
@@ -354,13 +379,16 @@ class model_infer:
   def face_detector(self, images, image_ids, batch_size):
     return object_detection.main(self.param_dict, images)
 
-  def augment_images(self, images, greedy=0.69, angle=8, scale=1.0):
+  def augment_images(self, images, greedy=0.69, angle=8, scale=1.0, grayscale=False):
     # flip image
-    result = np.zeros((len(images)*2,160,160,3))
+    if grayscale:
+      result = np.zeros((len(images)*2,160,160))
+    else:
+      result = np.zeros((len(images)*2,160,160,3))
     for ii in range(0,len(images),1):
       result[2*ii] = images[ii].copy()
       if greedy > random.uniform(0.0, 1.0):
-        result[2*ii+1] = rotate(images[ii], angle=angle, scale=scale)
+        result[2*ii+1] = rotate(images[ii], angle=angle, scale=scale, grayscale=grayscale)
       else:
         result[2*ii+1] = cv2.flip(images[ii], 1)
     return result
@@ -384,7 +412,7 @@ class model_infer:
     global model, graph
     with tf.Session().as_default() as sess:
       if self.args.data_location:
-        self.build_data_sess()
+        network = self.build_data_sess()
       else:
         raise Exception("no data location provided")
       total_samples = 0
@@ -406,7 +434,7 @@ class model_infer:
       ds_iterator = tf.data.make_one_shot_iterator(ds)
       state = None
       warmup_iter = 0
-      
+
       self.ground_truth_dicts = {}
       self.detect_dicts = {}
 
@@ -434,28 +462,41 @@ class model_infer:
           self.image_id_gt_dict[step] = image_id_gt[0]
 
           images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('RGB'))
+
           # face detection
           boxes, confidences, classIds = self.face_detector(images, image_id_gt, self.args.batch_size)
+
+          images = np.asarray(PIL.Image.open(os.path.join(self.args.imagesets_dir, image_id_gt[0])).convert('L'))
 
           boxes = self.filter_conventional_box_images(boxes)
           try:
             if len(boxes) > 0:
               # ground truth bounding box
-              images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt)
+              images_new = self.preprocess_bounding_box_images(images, bbox[0], image_id_gt, grayscale=True)
               total_samples += images_new.shape[0]
-              images_new = self.augment_images(images_new)
+              images_new = self.augment_images(images_new, grayscale=True)
 
               # detection for bounding boxes from pascal voc
               detect = {}
               label_det = label_gt
               image_id_det = image_id_gt
               # detected conventional bounding box
-              images_sync = self.preprocess_conventional_box_images(images, boxes, image_id_det)
-              images_sync = self.augment_images(images_sync)
+              images_sync = self.preprocess_conventional_box_images(images, boxes, image_id_det, grayscale=True)
+              images_sync = self.augment_images(images_sync, grayscale=True)
+
+              if True:
+                images_sync = np.expand_dims(images_sync, 3)
+              
+              images_sync = images_sync.transpose((0,3,1,2))
+
+              images = np.zeros((1,100,1,160,160))
+              l = 100 if len(images_sync) > 100 else len(images_sync)
+              images[:,0:l,:,:] = images_sync[0:l]
+              images_sync = images
 
               detect['boxes'] = np.asarray(boxes)
               detect['classes'] = np.asarray(label_det*len(detect['boxes']))
-              features = self.arcface_model.predict(images_sync, verbose=1)
+              features = self.arcface_model.predict(network, images_sync, 0.5, verbose=1)
               measures = self.measure(features)
               if measures[0][0]:
                 detect['scores'] = np.broadcast_to(np.mean(np.asarray(measures[0][1])),len(detect['boxes']))
@@ -466,10 +507,13 @@ class model_infer:
               
               self.detect_dicts[step] = detect
           except Exception as e:
-            print(e.args)
+            raise e
 
           if (step + 1) % 10 == 0:
             print('steps = {0} step'.format(str(step)))
+
+          if step == 70:
+            break
 
   def run(self):
     if self.args.accuracy_only:

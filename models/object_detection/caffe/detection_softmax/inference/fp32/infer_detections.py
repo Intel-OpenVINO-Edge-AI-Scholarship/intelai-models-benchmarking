@@ -41,6 +41,8 @@ from inference.face_label_map import category_map
 from tensorflow.python.data.experimental import parallel_interleave
 from tensorflow.python.data.experimental import map_and_batch
 
+import score
+
 IMAGE_SIZE = 400
 # dataset is VOC2007 with person_test.txt
 COCO_NUM_VAL_IMAGES = 2008
@@ -336,20 +338,6 @@ class model_infer(object):
         self.coord.request_stop()
         self.coord.join(self.threads)
 
-  def get_input(self, sess):
-    box, label, part, image_id, features = parse_and_preprocess(serialized_example)
-    # self.threads = tf.train.start_queue_runners(sess=sess, coord = self.coord)
-
-    return tuple(features.items()), box, label, part, image_id
-
-  # 1, 1000, 1, 1
-  def lognorm(self, probability):
-    return np.dot(self.weights, 
-      self.alpha * np.exp(probability-np.mean(probability))+\
-      np.square(probability-np.mean(probability)) + \
-      np.min(probability) * np.log(np.square(probability-np.mean(probability)))
-    )
-
   def accuracy_check(self):
     print("Inference for accuracy check.")
     total_iter = COCO_NUM_VAL_IMAGES
@@ -444,7 +432,7 @@ def run_ice_breaker_session(result, obj, fm, sess, total_iter, break_session, id
     # detected conventional bounding box same as ground truth bounding boxes
     output = obj.get_output(images_new)
     # 1, 1000, 1, 1
-    output = obj.lognorm(output[0,:,0,0])
+    output = score.lognorm(obj.weights, output[0,:,0,0], obj.alpha)
     detect['scores'] = np.broadcast_to(np.asarray(output), len(detect['boxes']))
     obj.detect_dicts[step] = detect
   except Exception as e:

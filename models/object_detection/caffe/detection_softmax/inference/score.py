@@ -12,4 +12,12 @@ def process_outputs(output, significant, to_significant):
     result = np.zeros_like(output)
     for d in range(significant,to_significant+1,1):
         result += np.round(output,d)
-    return 1 / (to_significant-significant+1) * result
+    return 1 / (to_significant-significant+1) * result / output.flatten().shape[0]
+
+# 1, 1000, 1, 1
+def lognorm(weights, probability, alpha):
+    return np.dot(weights, 
+        alpha * np.exp(probability-np.mean(probability))+\
+        np.square(probability-np.mean(probability)) + \
+        np.min(probability) * np.log(np.square(probability-np.mean(probability)))
+    ) / weights.sum()
